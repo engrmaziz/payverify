@@ -1,7 +1,3 @@
-"""
-Admin routes — protected by API key.
-Use these from a simple admin dashboard or curl.
-"""
 import logging
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
@@ -19,9 +15,9 @@ def _require_admin(api_key: str):
 
 
 @router.get("/admin/parse-failed", summary="List all SMS that failed to parse")
-def list_parse_failed(x_admin_key: str = Header(default="")):
+async def list_parse_failed(x_admin_key: str = Header(default="")):
     _require_admin(x_admin_key)
-    rows = get_parse_failed_rows(limit=100)
+    rows = await get_parse_failed_rows(limit=100)
     return {"count": len(rows), "rows": rows}
 
 
@@ -33,12 +29,12 @@ class ManualResolveRequest(BaseModel):
 
 
 @router.post("/admin/resolve", summary="Manually fix a PARSE_FAILED row")
-def resolve_parse_failed(
+async def resolve_parse_failed(
     req: ManualResolveRequest,
     x_admin_key: str = Header(default=""),
 ):
     _require_admin(x_admin_key)
-    manual_resolve(
+    await manual_resolve(
         row_id=req.row_id,
         txn_id=req.txn_id,
         amount=req.amount,
