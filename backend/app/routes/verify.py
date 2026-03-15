@@ -33,9 +33,10 @@ async def verify_payment(req: VerifyRequest, background_tasks: BackgroundTasks):
             message="Transaction ID cannot be empty.",
         )
 
-    row = lookup_txn(txn_id)
+    # ── Lookup ─────────────────────────────────────────────────────────────────
+    row = await lookup_txn(txn_id)
 
-    # ── Case 1: Not in DB yet ──────────────────────────────────────────────────
+    # ── Case 1: Not found yet ──────────────────────────────────────────────────
     if not row:
         logger.info(f"Txn not found: {txn_id}")
         return VerifyResponse(
@@ -43,9 +44,9 @@ async def verify_payment(req: VerifyRequest, background_tasks: BackgroundTasks):
             message="Transaction not received yet. Wait 2 minutes and try again.",
         )
 
-    # ── Case 2: Already claimed by someone ────────────────────────────────────
+    # ── Case 2: Already claimed ────────────────────────────────────────────────
     if row["status"] == "USED":
-        logger.warning(f"Duplicate claim attempt: txn={txn_id} student={req.student_id}")
+        logger.warning(f"Duplicate claim: txn={txn_id} student={req.student_id}")
         return VerifyResponse(
             status="ALREADY_USED",
             message="This transaction ID has already been used.",
@@ -58,7 +59,7 @@ async def verify_payment(req: VerifyRequest, background_tasks: BackgroundTasks):
             message="Your payment was received but needs manual review. Please contact admin.",
         )
 
-    # ── Case 4: Already verified (idempotent re-submit) ───────────────────────
+    # ── Case 4: Already verified (idempotent) ─────────────────────────────────
     if row["status"] == "VERIFIED":
         return VerifyResponse(
             status="SUCCESS",
@@ -69,7 +70,7 @@ async def verify_payment(req: VerifyRequest, background_tasks: BackgroundTasks):
         )
 
     # ── Case 5: Fresh UNMATCHED — claim it ────────────────────────────────────
-    mark_verified(row["id"], req.student_id)
+    await mark_verified(row["id"], req.student_id)
     logger.info(
         f"Payment verified: txn={txn_id} student={req.student_id} amount={row['amount']}"
     )
@@ -77,7 +78,7 @@ async def verify_payment(req: VerifyRequest, background_tasks: BackgroundTasks):
     amount = float(row["amount"] or 0)
     bank = row["bank"] or "Unknown"
 
-    # Send emails in background — never block the response
+    # Send emails in background
     if req.student_email:
         background_tasks.add_task(
             send_verification_email,
