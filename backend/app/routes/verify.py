@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 
 from app.db.supabase_client import lookup_txn, mark_verified, mark_used
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class VerifyRequest(BaseModel):
     transaction_id: str
     student_id: str
-    student_email: str = ""   # optional — send receipt if provided
+    student_email: str = ""
 
 
 class VerifyResponse(BaseModel):
@@ -24,7 +24,7 @@ class VerifyResponse(BaseModel):
 
 
 @router.post("/verify", response_model=VerifyResponse, summary="Student submits transaction ID")
-async def verify_payment(req: VerifyRequest):
+async def verify_payment(req: VerifyRequest, background_tasks: BackgroundTasks):
     txn_id = req.transaction_id.strip()
 
     if not txn_id:
@@ -70,31 +70,30 @@ async def verify_payment(req: VerifyRequest):
 
     # ── Case 5: Fresh UNMATCHED — claim it ────────────────────────────────────
     mark_verified(row["id"], req.student_id)
-    logger.info(f"Payment verified: txn={txn_id} student={req.student_id} amount={row['amount']}")
+    logger.info(
+        f"Payment verified: txn={txn_id} student={req.student_id} amount={row['amount']}"
+    )
 
-    # Fire emails in background (don't block the response)
     amount = float(row["amount"] or 0)
     bank = row["bank"] or "Unknown"
 
+    # Send emails in background — never block the response
     if req.student_email:
-        import asyncio
-        asyncio.create_task(
-            send_verification_email(
-                student_email=req.student_email,
-                student_id=req.student_id,
-                amount=amount,
-                bank=bank,
-                txn_id=txn_id,
-            )
-        )
-
-    asyncio.create_task(
-        send_admin_payment_alert(
+        background_tasks.add_task(
+            send_verification_email,
+            student_email=req.student_email,
+            student_id=req.student_id,
             amount=amount,
             bank=bank,
             txn_id=txn_id,
-            student_id=req.student_id,
         )
+
+    background_tasks.add_task(
+        send_admin_payment_alert,
+        amount=amount,
+        bank=bank,
+        txn_id=txn_id,
+        student_id=req.student_id,
     )
 
     return VerifyResponse(
